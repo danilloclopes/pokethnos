@@ -1158,25 +1158,261 @@ body {
 
 <script>
 // ═══════════════════════════════════════════════════════
+//  CLASSES DE DOMÍNIO — espelham o diagrama de classes
+// ═══════════════════════════════════════════════════════
+
+class Cor {
+  constructor(nome) { this.nome = nome; }
+  toString() { return this.nome; }
+}
+
+class Regiao {
+  constructor(id, nome, cor) {
+    this.id    = id;
+    this.nome  = nome;
+    this.cor   = cor instanceof Cor ? cor : new Cor(cor);
+    this.color = id; // alias: CSS class name == region id
+    this.pontosEra1 = 0;
+    this.pontosEra2 = 0;
+    this.pontosEra3 = 0;
+  }
+  get name() { return this.nome; }
+  setPontos(vals) {
+    this.pontosEra1 = vals[0] || 0;
+    this.pontosEra2 = vals[1] || 0;
+    this.pontosEra3 = vals[2] || 0;
+  }
+}
+
+class Tribo {
+  constructor(id, nome, icon) {
+    this.id        = id;
+    this.nome      = nome;
+    this.icon      = icon;
+    this.descricao = '';
+  }
+  get name() { return this.nome; }
+}
+
+class Carta {
+  constructor(id, nome, regiao) {
+    this.id     = id;
+    this.nome   = nome;
+    this.regiao = regiao; // Regiao | null
+  }
+  get name() { return this.nome; }
+}
+
+class CartaPokemon extends Carta {
+  constructor(id, nome, tribo, regiao, nivel) {
+    super(id, nome, regiao);
+    this.tribo = tribo;  // Tribo
+    this.nivel = nivel;  // 'base' | 'evoluido'
+    this.cor   = regiao ? regiao.cor : null;
+  }
+  // compat getters — código existente usa .cls / .region / .evolved
+  get cls()     { return this.tribo.id; }
+  get region()  { return this.regiao ? this.regiao.id : null; }
+  get evolved() { return this.nivel === 'evoluido'; }
+
+  ehLider() { return false; }
+  getPontuacao(bandSize) { return GLORY_TABLE[Math.min(bandSize, 10)] || 0; }
+  getHabilidade() {
+    return this.evolved ? (this.tribo.habilidadeEvoluida || '') : (this.tribo.habilidadeBase || '');
+  }
+  aplicarHabilidade(bando, jogo) {
+    this.evolved ? this.aplicarHabilidadeEvoluida(bando, jogo) : this.aplicarHabilidadeBase(bando, jogo);
+  }
+  aplicarHabilidadeBase(bando, jogo)     {}
+  aplicarHabilidadeEvoluida(bando, jogo) {}
+}
+
+class PokemonBase extends CartaPokemon {
+  constructor(id, nome, tribo, regiao) { super(id, nome, tribo, regiao, 'base'); }
+}
+
+class PokemonEvoluido extends CartaPokemon {
+  constructor(id, nome, tribo, regiao) { super(id, nome, tribo, regiao, 'evoluido'); }
+}
+
+class CartaDragao extends Carta {
+  constructor(id, nome, dragonIdx) {
+    super(id, nome, null);
+    this.dragonIdx   = dragonIdx;
+    this.revealOrder = null;
+    // compat flags esperados pelo código de renderização
+    this.cls     = 'dragon';
+    this.region  = null;
+    this.evolved = false;
+  }
+  encerrarEra(jogo) { jogo.phase = 'era-ending'; }
+}
+
+class MarcadorRegiao {
+  constructor(jogador, regiao) {
+    this.jogador    = jogador;
+    this.regiao     = regiao;
+    this.quantidade = 0;
+  }
+  adicionarMarcador(qtd = 1) { this.quantidade += qtd; }
+  removerMarcador(qtd = 1)   { this.quantidade = Math.max(0, this.quantidade - qtd); }
+}
+
+class Bando {
+  constructor() {
+    this.cartas  = [];   // List<CartaPokemon>
+    this._lider  = null;
+  }
+  formarBando(cartas)   { this.cartas = [...cartas]; }
+  lider()               { return this._lider; }
+  definirLider(carta)   { this._lider = carta; }
+
+  get tamanho()         { return this.cartas.length; }
+  get tamanhoEfetivo()  {
+    const ldr = this._lider;
+    if (!ldr || ldr.cls !== 'metalicos') return this.tamanho;
+    return this.tamanho + (ldr.evolved ? 2 : 1);
+  }
+
+  aplicarEfeitoLider(jogo) { if (this._lider) this._lider.aplicarHabilidade(this, jogo); }
+
+  ehValido() {
+    if (this.cartas.length === 0) return false;
+    const first = this.cartas[0];
+    return this.cartas.every(c => c.region === first.region) ||
+           this.cartas.every(c => c.cls === first.cls);
+  }
+}
+
+class Jogador {
+  constructor(id, nome, cor) {
+    this.id           = id;
+    this.nome         = nome;
+    this.cor          = cor;
+    this.mao          = [];  // List<CartaPokemon>
+    this.bandos       = [];  // List<Bando> jogados na era
+    this.pontosTotais = 0;
+    this.marcadores   = {};  // regionId -> MarcadorRegiao
+  }
+  // compat aliases — código de render/lógica usa .name/.color/.hand/.glory/.controlMarkers
+  get name()        { return this.nome; }
+  get color()       { return this.cor; }
+  get hand()        { return this.mao; }
+  set hand(v)       { this.mao = v; }
+  get glory()       { return this.pontosTotais; }
+  set glory(v)      { this.pontosTotais = v; }
+  get bandsPlayed() { return this.bandos; }
+  set bandsPlayed(v){ this.bandos = v; }
+
+  get controlMarkers() {
+    const obj = {};
+    for (const [k, m] of Object.entries(this.marcadores)) obj[k] = m.quantidade;
+    return obj;
+  }
+
+  inicializarMarcadores(regioes) {
+    regioes.forEach(r => { this.marcadores[r.id] = new MarcadorRegiao(this, r); });
+  }
+  getMarcadores(regiaoId)   { return this.marcadores[regiaoId]?.quantidade || 0; }
+  adicionarMarcador(regiaoId) { this.marcadores[regiaoId]?.adicionarMarcador(); }
+
+  jogarBando(bando) { this.bandos.push(bando); }
+
+  calcularPontuacao(bandSizes) {
+    return bandSizes.reduce((s, sz) => s + (sz >= 6 ? 15 : GLORY_TABLE[sz] || 0), 0);
+  }
+}
+
+class Baralho {
+  constructor() {
+    this.cartasFaceParaBaixo = []; // deck (face para baixo)
+    this.cartasFaceParaCima  = []; // cartas na mesa (face para cima)
+  }
+  embaralhar()          { shuffle(this.cartasFaceParaBaixo); return this; }
+  comprarCarta()        { return this.cartasFaceParaBaixo.shift() || null; }
+  descartarCarta(carta) { this.cartasFaceParaCima.push(carta); }
+  resetarBaralho()      { this.cartasFaceParaBaixo = []; this.cartasFaceParaCima = []; }
+  get length()          { return this.cartasFaceParaBaixo.length; }
+}
+
+class Tabuleiro {
+  constructor(regioes) {
+    this.regioes      = regioes; // List<Regiao>
+    this.marcadores   = [];      // List<MarcadorRegiao> (todos jogadores / todas regiões)
+    this.cartasDragao = [];      // List<CartaDragao> revelados na era corrente
+  }
+  adicionarDragao(carta) { this.cartasDragao.push(carta); }
+  limparDragoes()        { this.cartasDragao = []; }
+  verificarFimEra()      { return this.cartasDragao.length > 0; }
+  distribuirPontos(era, jogadores) { /* delegado para endEra() */ }
+}
+
+class GerenciadorJogo {
+  constructor() {
+    this.eraAtual             = 1;
+    this.turnoAtual           = 0;
+    this.jogadores            = [];
+    this.tabuleiro            = null;
+    this.baralho              = new Baralho();
+    this.totalEras            = 3;
+    this.is23                 = false;
+    this.currentPlayerIdx     = 0;
+    this.phase                = 'play';
+    this.dragonsSeen          = [];
+    this.dragoniteDrawnBy     = null;
+    this.masterPokemon        = [];
+    this.masterDragons        = [];
+    this.tokens               = [];
+    this.log                  = [];
+    this.turnState            = 'choose';
+    this.bandoAtual           = new Bando();
+    this.leaderCard           = null;
+    this.secondBand           = false;
+    this.lutadorEvolvedSecondBand = false;
+    this.bandsPlayedThisEra   = [];
+    this.removedCards         = [];
+    this._flyChosenRegion     = null;
+    this._psiquicoDraw        = 0;
+    this._pendingRegion       = null;
+  }
+  // compat getters/setters — código procedural existente continua funcionando
+  get era()         { return this.eraAtual; }
+  set era(v)        { this.eraAtual = v; }
+  get players()     { return this.jogadores; }
+  set players(v)    { this.jogadores = v; }
+  get deck()        { return this.baralho.cartasFaceParaBaixo; }
+  set deck(v)       { this.baralho.cartasFaceParaBaixo = v; }
+  get tableCards()  { return this.baralho.cartasFaceParaCima; }
+  set tableCards(v) { this.baralho.cartasFaceParaCima = v; }
+  get bandCards()   { return this.bandoAtual.cartas; }
+  set bandCards(v)  { this.bandoAtual.cartas = v; }
+
+  iniciarJogo()       { startEra(); }
+  proximaRodada()     { endTurn(); }
+  verificarTrocaEra() { return this.phase === 'era-ending'; }
+  finalizarPartida()  { showEndScreen(); }
+}
+
+// ═══════════════════════════════════════════════════════
 //  DATA
 // ═══════════════════════════════════════════════════════
 
 const REGIONS = [
-  { id: 'marrom',   name: 'Deserto',          color: 'marrom'   },
-  { id: 'verde',    name: 'Floresta Densa',    color: 'verde'    },
-  { id: 'vermelho', name: 'Vulcão em Erupção', color: 'vermelho' },
-  { id: 'azul',     name: 'Templo do Mar',     color: 'azul'     },
-  { id: 'roxo',     name: 'Cemitério',         color: 'roxo'     },
-  { id: 'cinza',    name: 'Cidade Abandonada', color: 'cinza'    },
+  new Regiao('marrom',   'Deserto',          'marrom'),
+  new Regiao('verde',    'Floresta Densa',    'verde'),
+  new Regiao('vermelho', 'Vulcão em Erupção', 'vermelho'),
+  new Regiao('azul',     'Templo do Mar',     'azul'),
+  new Regiao('roxo',     'Cemitério',         'roxo'),
+  new Regiao('cinza',    'Cidade Abandonada', 'cinza'),
 ];
 
 const CLASSES = [
-  { id: 'voadores',  name: 'Voadores',  icon: '🦅' },
-  { id: 'venenosos', name: 'Venenosos', icon: '☠' },
-  { id: 'psiquicos', name: 'Psíquicos', icon: '✨' },
-  { id: 'metalicos', name: 'Metálicos', icon: '⚙' },
-  { id: 'fadas',     name: 'Fadas',     icon: '⭐' },
-  { id: 'lutadores', name: 'Lutadores', icon: '👊' },
+  new Tribo('voadores',  'Voadores',  '🦅'),
+  new Tribo('venenosos', 'Venenosos', '☠'),
+  new Tribo('psiquicos', 'Psíquicos', '✨'),
+  new Tribo('metalicos', 'Metálicos', '⚙'),
+  new Tribo('fadas',     'Fadas',     '⭐'),
+  new Tribo('lutadores', 'Lutadores', '👊'),
 ];
 
 const POKEMON = {
@@ -1290,69 +1526,51 @@ const POKEMON_IMG = {
 };
 
 // ═══════════════════════════════════════════════════════
-//  GAME STATE
+//  ESTADO DO JOGO
 // ═══════════════════════════════════════════════════════
-let G = {};
+let G = new GerenciadorJogo();
 
 function initGame(playerNames) {
-  const n = playerNames.length;
-  const is23 = n <= 3;
+  const n       = playerNames.length;
+  const is23    = n <= 3;
   const totalEras = is23 ? 2 : 3;
 
-  // Cria o conjunto master de 75 cartas UMA Única vez (72 Pokemon + 3 dragões)
+  // Cria conjunto master de cartas usando as classes de domínio
   const masterPokemon = [];
-  CLASSES.forEach(cls => {
+  CLASSES.forEach(tribo => {
     REGIONS.forEach(reg => {
-      masterPokemon.push({ id: uid(), cls: cls.id, region: reg.id, evolved: false, name: POKEMON[cls.id][reg.id][0] });
-      masterPokemon.push({ id: uid(), cls: cls.id, region: reg.id, evolved: true,  name: POKEMON[cls.id][reg.id][1] });
+      masterPokemon.push(new PokemonBase(uid(),    POKEMON[tribo.id][reg.id][0], tribo, reg));
+      masterPokemon.push(new PokemonEvoluido(uid(), POKEMON[tribo.id][reg.id][1], tribo, reg));
     });
   });
   const masterDragons = [
-    { id: uid(), cls: 'dragon', region: null, evolved: false, name: 'Dratini',   dragonIdx: 0 },
-    { id: uid(), cls: 'dragon', region: null, evolved: false, name: 'Dragonair', dragonIdx: 1 },
-    { id: uid(), cls: 'dragon', region: null, evolved: false, name: 'Dragonite', dragonIdx: 2 },
+    new CartaDragao(uid(), 'Dratini',   0),
+    new CartaDragao(uid(), 'Dragonair', 1),
+    new CartaDragao(uid(), 'Dragonite', 2),
   ];
 
-  // Glory tokens
-  const tokens = REGIONS.map((r, i) => {
-    if (is23) {
-      return GLORY_TOKENS_23[i].slice(0, 2);
-    } else {
-      return GLORY_TOKENS_4PLUS[i].slice(0, 3);
-    }
+  // Glory tokens — atualiza cada Regiao com os pontos corretos para a partida
+  const tokens = REGIONS.map((reg, i) => {
+    const vals = is23 ? GLORY_TOKENS_23[i].slice(0, 2) : GLORY_TOKENS_4PLUS[i].slice(0, 3);
+    reg.setPontos(vals);
+    return vals;
   });
 
-  G = {
-    players: playerNames.map((name, i) => ({
-      id: i, name, color: PLAYER_COLORS[i], glory: 0, hand: [],
-      controlMarkers: {},
-      bandsPlayed: [],
-    })),
-    era: 1,
-    totalEras,
-    is23,
-    currentPlayerIdx: 0,
-    phase: 'play',
-    deck: [],
-    tableCards: [],
-    removedCards: [],
-    dragonsSeen: [],
-    dragoniteDrawnBy: null,
-    masterPokemon,
-    masterDragons,
-    tokens,
-    log: [],
-    turnState: 'choose',
-    bandCards: [],
-    leaderCard: null,
-    secondBand: false,
-    lutadorEvolvedSecondBand: false,
-    bandsPlayedThisEra: playerNames.map(() => []),
-  };
+  G = new GerenciadorJogo();
+  G.is23      = is23;
+  G.totalEras = totalEras;
 
-  REGIONS.forEach(r => {
-    G.players.forEach(p => { p.controlMarkers[r.id] = 0; });
+  G.players = playerNames.map((nome, i) => {
+    const jogador = new Jogador(i, nome, PLAYER_COLORS[i]);
+    jogador.inicializarMarcadores(REGIONS);
+    return jogador;
   });
+
+  G.masterPokemon       = masterPokemon;
+  G.masterDragons       = masterDragons;
+  G.tokens              = tokens;
+  G.tabuleiro           = new Tabuleiro(REGIONS);
+  G.bandsPlayedThisEra  = playerNames.map(() => []);
 
   startEra();
 }
@@ -1363,6 +1581,7 @@ function startEra() {
   G.removedCards = [];
   G.bandsPlayedThisEra = G.players.map(() => []);
   G.players.forEach(p => { p.hand = []; p.bandsPlayed = []; });
+  G.tabuleiro.limparDragoes();
   // G.tableCards e G.deck NÃO são resetados entre eras —
   // as cartas da mesa permanecem e o baralho continua de onde parou.
   // Apenas na Era 1 o deck é montado do zero.
@@ -1425,11 +1644,11 @@ function revealFromDeck() {
 }
 
 function handleDragonRevealed(card, fromReveal) {
-  card.revealOrder = G.dragonsSeen.length; // 0 = primeiro, 1 = segundo, 2 = terceiro
+  card.revealOrder = G.dragonsSeen.length;
   G.dragonsSeen.push(card);
+  G.tabuleiro.adicionarDragao(card);
   log(`🐉 ${card.name} revelado! A Era termina!`);
-  // Qualquer dragão encerra a era imediatamente
-  G.phase = 'era-ending';
+  card.encerrarEra(G);
   renderAll();
   setTimeout(() => { endEra(); }, 600);
 }
@@ -1526,8 +1745,8 @@ function endRecruit() {
 }
 
 function startBuildBand() {
-  G.turnState = 'building-band';
-  G.bandCards = [];
+  G.bandoAtual = new Bando();
+  G.turnState  = 'building-band';
   G.leaderCard = null;
   renderAll();
 }
@@ -1609,7 +1828,9 @@ function resolvePlayBand() {
     effectiveBandSize += leader.evolved ? 2 : 1;
   }
 
-  // Record band for scoring
+  // Registra Bando e Líder nas instâncias de domínio
+  G.bandoAtual.definirLider(leader);
+  p.jogarBando(G.bandoAtual);
   G.bandsPlayedThisEra[G.currentPlayerIdx].push(effectiveBandSize);
 
   // Discard remaining hand (after band is removed) - handled by ability
@@ -1716,7 +1937,7 @@ function afterAbility(leader, effectiveBandSize, leaderRegion, canPlace) {
   }
 
   if (actualCanPlace) {
-    p.controlMarkers[regionForMarker] = (p.controlMarkers[regionForMarker] || 0) + 1;
+    p.adicionarMarcador(regionForMarker);
     log(`${p.name} colocou marcador em ${REGIONS.find(r=>r.id===regionForMarker)?.name}.`);
   } else {
     log(`${p.name} não pôde colocar marcador.`);
@@ -1892,8 +2113,8 @@ function acceptLutador() {
   closeModal('lutador-modal');
   G.secondBand = true;
   G.lutadorEvolvedSecondBand = window._lutadorEvolved;
-  G.turnState = 'building-band';
-  G.bandCards = [];
+  G.bandoAtual = new Bando();
+  G.turnState  = 'building-band';
   G.leaderCard = null;
   renderAll();
 }
@@ -1913,13 +2134,15 @@ function resolveSecondBand() {
   const band = G.bandCards;
   let effectiveBandSize = band.length;
   if (leader.cls === 'metalicos') effectiveBandSize += leader.evolved ? 2 : 1;
+  G.bandoAtual.definirLider(leader);
+  p.jogarBando(G.bandoAtual);
   G.bandsPlayedThisEra[G.currentPlayerIdx].push(effectiveBandSize);
 
   const leaderRegion = leader.region;
   const canPlace = effectiveBandSize > (p.controlMarkers[leaderRegion] || 0);
 
   if (canPlace) {
-    p.controlMarkers[leaderRegion] = (p.controlMarkers[leaderRegion] || 0) + 1;
+    p.adicionarMarcador(leaderRegion);
     log(`${p.name} (2°Bando) colocou marcador em ${REGIONS.find(r=>r.id===leaderRegion)?.name}.`);
   }
 
@@ -1945,8 +2168,8 @@ function resolveSecondBand() {
 }
 
 function endTurn() {
-  G.turnState = 'choose';
-  G.bandCards = [];
+  G.turnState  = 'choose';
+  G.bandoAtual = new Bando();
   G.leaderCard = null;
   G.secondBand = false;
 
@@ -2362,12 +2585,11 @@ function renderBand() {
 }
 
 function cancelBand() {
-  // Return band cards to hand
   const p = currentPlayer();
   G.bandCards.forEach(c => p.hand.push(c));
-  G.bandCards = [];
+  G.bandoAtual = new Bando();
   G.leaderCard = null;
-  G.turnState = 'choose';
+  G.turnState  = 'choose';
   G.secondBand = false;
   renderAll();
 }
