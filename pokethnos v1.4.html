@@ -1330,7 +1330,7 @@ class Jogador {
   getMarcadores(regiaoId)   { return this.marcadores[regiaoId]?.quantidade || 0; }
   adicionarMarcador(regiaoId) { this.marcadores[regiaoId]?.adicionarMarcador(); }
 
-  jogarBando(bando) { this.bandos.push(bando); }
+  jogarBando(cartas) { G.jogarBando(cartas); this.bandos.push(G.bandoAtual); }
 
   calcularPontuacao(bandSizes) {
     return bandSizes.reduce((s, sz) => s + (sz >= 6 ? 15 : GLORY_TABLE[sz] || 0), 0);
@@ -1552,6 +1552,11 @@ class GerenciadorJogo {
     this.currentPlayerIdx = (this.currentPlayerIdx + 1) % this.jogadores.length;
     renderAll();
     showPassScreen();
+  }
+
+  jogarBando(cartas) {
+    this.bandoAtual = new Bando();
+    this.bandoAtual.formarBando(cartas);
   }
 
   iniciarJogo()       { startEra(); }
@@ -1982,8 +1987,8 @@ function resolvePlayBand() {
   let effectiveBandSize = bandSize;
   if (leader.cls === 'metalicos') effectiveBandSize += leader.evolved ? 2 : 1;
 
+  p.jogarBando([...G.bandCards]);
   G.bandoAtual.definirLider(leader);
-  p.jogarBando(G.bandoAtual);
   G.bandsPlayedThisEra[G.currentPlayerIdx].push(effectiveBandSize);
 
   const leaderRegion = leader.region;
@@ -2191,8 +2196,8 @@ function resolveSecondBand() {
   const band = G.bandCards;
   let effectiveBandSize = band.length;
   if (leader.cls === 'metalicos') effectiveBandSize += leader.evolved ? 2 : 1;
+  p.jogarBando([...G.bandCards]);
   G.bandoAtual.definirLider(leader);
-  p.jogarBando(G.bandoAtual);
   G.bandsPlayedThisEra[G.currentPlayerIdx].push(effectiveBandSize);
 
   const leaderRegion = leader.region;
